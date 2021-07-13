@@ -34,7 +34,8 @@ import java.util.concurrent.TimeUnit;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class ClientTestFixtures {
     public static ScheduledExecutorService SCHEDULER = Executors.newSingleThreadScheduledExecutor();
@@ -72,7 +73,17 @@ class ClientTestFixtures {
         return future;
     }
 
+    static <T> CompletableFuture<T> createExceptionFuture(Throwable ex, int delayMillis) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        SCHEDULER.schedule(() -> future.completeExceptionally(ex), delayMillis, TimeUnit.MILLISECONDS);
+        return future;
+    }
+
     public static ExecutorService createMockedExecutor() {
         return mock(ExecutorService.class);
+    }
+
+    public static ExecutorProvider createMockedExecutorProvider() {
+        return mock(ExecutorProvider.class);
     }
 }

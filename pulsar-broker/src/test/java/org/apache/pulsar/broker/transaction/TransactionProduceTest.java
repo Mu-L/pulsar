@@ -21,6 +21,7 @@ package org.apache.pulsar.broker.transaction;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.collect.Sets;
+
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -30,8 +31,10 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+
 import lombok.Cleanup;
 import lombok.extern.slf4j.Slf4j;
+
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ReadOnlyCursor;
@@ -49,13 +52,15 @@ import org.apache.pulsar.client.api.SubscriptionInitialPosition;
 import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.client.api.transaction.Transaction;
 import org.apache.pulsar.client.impl.transaction.TransactionImpl;
-import org.apache.pulsar.common.api.proto.PulsarApi;
-import org.apache.pulsar.common.api.proto.PulsarMarkers;
+import org.apache.pulsar.common.api.proto.MarkerType;
+import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.ClusterData;
-import org.apache.pulsar.common.policies.data.TenantInfo;
+import org.apache.pulsar.common.policies.data.ClusterDataImpl;
+import org.apache.pulsar.common.policies.data.TenantInfoImpl;
 import org.apache.pulsar.common.protocol.Commands;
+import org.awaitility.Awaitility;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -65,16 +70,17 @@ import org.testng.annotations.Test;
  * Pulsar client transaction test.
  */
 @Slf4j
+@Test(groups = "broker")
 public class TransactionProduceTest extends TransactionTestBase {
 
-    private final static int TOPIC_PARTITION = 3;
+    private static final int TOPIC_PARTITION = 3;
 
-    private final static String TENANT = "tnx";
-    private final static String NAMESPACE1 = TENANT + "/ns1";
-    private final static String PRODUCE_COMMIT_TOPIC = NAMESPACE1 + "/produce-commit";
-    private final static String PRODUCE_ABORT_TOPIC = NAMESPACE1 + "/produce-abort";
-    private final static String ACK_COMMIT_TOPIC = NAMESPACE1 + "/ack-commit";
-    private final static String ACK_ABORT_TOPIC = NAMESPACE1 + "/ack-abort";
+    private static final String TENANT = "tnx";
+    private static final String NAMESPACE1 = TENANT + "/ns1";
+    private static final String PRODUCE_COMMIT_TOPIC = NAMESPACE1 + "/produce-commit";
+    private static final String PRODUCE_ABORT_TOPIC = NAMESPACE1 + "/produce-abort";
+    private static final String ACK_COMMIT_TOPIC = NAMESPACE1 + "/ack-commit";
+    private static final String ACK_ABORT_TOPIC = NAMESPACE1 + "/ack-abort";
 
     @BeforeMethod
     protected void setup() throws Exception {
@@ -82,9 +88,9 @@ public class TransactionProduceTest extends TransactionTestBase {
 
         String[] brokerServiceUrlArr = getPulsarServiceList().get(0).getBrokerServiceUrl().split(":");
         String webServicePort = brokerServiceUrlArr[brokerServiceUrlArr.length -1];
-        admin.clusters().createCluster(CLUSTER_NAME, new ClusterData("http://localhost:" + webServicePort));
+        admin.clusters().createCluster(CLUSTER_NAME, ClusterData.builder().serviceUrl("http://localhost:" + webServicePort).build());
         admin.tenants().createTenant(TENANT,
-                new TenantInfo(Sets.newHashSet("appid1"), Sets.newHashSet(CLUSTER_NAME)));
+                new TenantInfoImpl(Sets.newHashSet("appid1"), Sets.newHashSet(CLUSTER_NAME)));
         admin.namespaces().createNamespace(NAMESPACE1);
         admin.topics().createPartitionedTopic(PRODUCE_COMMIT_TOPIC, 3);
         admin.topics().createPartitionedTopic(PRODUCE_ABORT_TOPIC, 3);
@@ -92,10 +98,13 @@ public class TransactionProduceTest extends TransactionTestBase {
         admin.topics().createPartitionedTopic(ACK_ABORT_TOPIC, 3);
 
         admin.tenants().createTenant(NamespaceName.SYSTEM_NAMESPACE.getTenant(),
-                new TenantInfo(Sets.newHashSet("appid1"), Sets.newHashSet(CLUSTER_NAME)));
+                new TenantInfoImpl(Sets.newHashSet("appid1"), Sets.newHashSet(CLUSTER_NAME)));
         admin.namespaces().createNamespace(NamespaceName.SYSTEM_NAMESPACE.toString());
         admin.topics().createPartitionedTopic(TopicName.TRANSACTION_COORDINATOR_ASSIGN.toString(), 16);
 
+        if (pulsarClient != null) {
+            pulsarClient.shutdown();
+        }
         pulsarClient = PulsarClient.builder()
                 .serviceUrl(getPulsarServiceList().get(0).getBrokerServiceUrl())
                 .statsInterval(0, TimeUnit.SECONDS)
@@ -157,8 +166,6 @@ public class TransactionProduceTest extends TransactionTestBase {
 
         checkMessageId(futureList, true);
 
-        PulsarApi.MessageMetadata messageMetadata;
-
         // the target topic hasn't the commit marker before commit
         for (int i = 0; i < TOPIC_PARTITION; i++) {
             ReadOnlyCursor originTopicCursor = getOriginTopicCursor(topic, i);
@@ -169,7 +176,7 @@ public class TransactionProduceTest extends TransactionTestBase {
             List<Entry> entries = originTopicCursor.readEntries(messageCnt);
             // check the messages
             for (int j = 0; j < messageCntPerPartition; j++) {
-                messageMetadata = Commands.parseMessageMetadata(entries.get(j).getDataBuffer());
+                MessageMetadata messageMetadata = Commands.parseMessageMetadata(entries.get(j).getDataBuffer());
                 Assert.assertEquals(messageMetadata.getTxnidMostBits(), txnIdMostBits);
                 Assert.assertEquals(messageMetadata.getTxnidLeastBits(), txnIdLeastBits);
 
@@ -193,11 +200,11 @@ public class TransactionProduceTest extends TransactionTestBase {
             List<Entry> entries = originTopicCursor.readEntries((int) originTopicCursor.getNumberOfEntries());
             Assert.assertEquals(messageCntPerPartition + 1, entries.size());
 
-            messageMetadata = Commands.parseMessageMetadata(entries.get(messageCntPerPartition).getDataBuffer());
+            MessageMetadata messageMetadata = Commands.parseMessageMetadata(entries.get(messageCntPerPartition).getDataBuffer());
             if (endAction) {
-                Assert.assertEquals(PulsarMarkers.MarkerType.TXN_COMMIT_VALUE, messageMetadata.getMarkerType());
+                Assert.assertEquals(MarkerType.TXN_COMMIT_VALUE, messageMetadata.getMarkerType());
             } else {
-                Assert.assertEquals(PulsarMarkers.MarkerType.TXN_ABORT_VALUE, messageMetadata.getMarkerType());
+                Assert.assertEquals(MarkerType.TXN_ABORT_VALUE, messageMetadata.getMarkerType());
             }
         }
 
@@ -274,6 +281,8 @@ public class TransactionProduceTest extends TransactionTestBase {
                 .subscriptionType(SubscriptionType.Shared)
                 .subscribe();
 
+        Awaitility.await().until(consumer::isConnected);
+
         for (int i = 0; i < incomingMessageCnt; i++) {
             Message<byte[]> message = consumer.receive();
             log.info("receive messageId: {}", message.getMessageId());
@@ -286,10 +295,8 @@ public class TransactionProduceTest extends TransactionTestBase {
         Assert.assertEquals(getPendingAckCount(ACK_COMMIT_TOPIC, subscriptionName), incomingMessageCnt);
 
         consumer.redeliverUnacknowledgedMessages();
-        for (int i = 0; i < incomingMessageCnt; i++) {
-            Message<byte[]> message = consumer.receive(2, TimeUnit.SECONDS);
-            Assert.assertNull(message);
-        }
+        Message<byte[]> message = consumer.receive(2, TimeUnit.SECONDS);
+        Assert.assertNull(message);
 
         // The pending messages count should be the incomingMessageCnt
         Assert.assertEquals(getPendingAckCount(ACK_COMMIT_TOPIC, subscriptionName), incomingMessageCnt);
@@ -303,7 +310,7 @@ public class TransactionProduceTest extends TransactionTestBase {
 
         consumer.redeliverUnacknowledgedMessages();
         for (int i = 0; i < incomingMessageCnt; i++) {
-            Message<byte[]> message = consumer.receive(2, TimeUnit.SECONDS);
+            message = consumer.receive(2, TimeUnit.SECONDS);
             Assert.assertNull(message);
         }
 
@@ -326,7 +333,7 @@ public class TransactionProduceTest extends TransactionTestBase {
                 .create();
         int incomingMessageCnt = 10;
         for (int i = 0; i < incomingMessageCnt; i++) {
-            incomingProducer.newMessage().value("Hello Txn.".getBytes()).sendAsync();
+            incomingProducer.newMessage().value("Hello Txn.".getBytes()).send();
         }
         log.info("prepare incoming messages finished.");
 
@@ -337,6 +344,7 @@ public class TransactionProduceTest extends TransactionTestBase {
                 .enableBatchIndexAcknowledgment(true)
                 .subscriptionType(SubscriptionType.Shared)
                 .subscribe();
+        Awaitility.await().until(consumer::isConnected);
 
         for (int i = 0; i < incomingMessageCnt; i++) {
             Message<byte[]> message = consumer.receive();
@@ -350,10 +358,8 @@ public class TransactionProduceTest extends TransactionTestBase {
         Assert.assertEquals(getPendingAckCount(ACK_ABORT_TOPIC, subscriptionName), incomingMessageCnt);
 
         consumer.redeliverUnacknowledgedMessages();
-        for (int i = 0; i < incomingMessageCnt; i++) {
-            Message<byte[]> message = consumer.receive(2, TimeUnit.SECONDS);
-            Assert.assertNull(message);
-        }
+        Message<byte[]> message = consumer.receive(2, TimeUnit.SECONDS);
+        Assert.assertNull(message);
 
         // The pending messages count should be the incomingMessageCnt
         Assert.assertEquals(getPendingAckCount(ACK_ABORT_TOPIC, subscriptionName), incomingMessageCnt);
@@ -367,7 +373,7 @@ public class TransactionProduceTest extends TransactionTestBase {
 
         consumer.redeliverUnacknowledgedMessages();
         for (int i = 0; i < incomingMessageCnt; i++) {
-            Message<byte[]> message = consumer.receive(2, TimeUnit.SECONDS);
+            message = consumer.receive(2, TimeUnit.SECONDS);
             Assert.assertNotNull(message);
             log.info("second receive messageId: {}", message.getMessageId());
         }

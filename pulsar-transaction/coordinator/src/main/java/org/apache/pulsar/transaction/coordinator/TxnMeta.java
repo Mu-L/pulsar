@@ -22,7 +22,7 @@ import com.google.common.annotations.Beta;
 import java.util.List;
 import org.apache.pulsar.client.api.transaction.TxnID;
 import org.apache.pulsar.transaction.coordinator.exceptions.CoordinatorException.InvalidTxnStatusException;
-import org.apache.pulsar.transaction.coordinator.proto.PulsarTransactionMetadata.TxnStatus;
+import org.apache.pulsar.transaction.coordinator.proto.TxnStatus;
 
 /**
  * An interface represents the metadata of a transaction in {@link TransactionMetadataStore}.
@@ -93,4 +93,18 @@ public interface TxnMeta {
      */
     TxnMeta updateTxnStatus(TxnStatus newStatus,
                             TxnStatus expectedStatus) throws InvalidTxnStatusException;
+
+    /**
+     * Return the transaction open timestamp.
+     *
+     * @return transaction open timestamp.
+     */
+    long getOpenTimestamp();
+
+    /**
+     * Return the transaction timeout at.
+     *
+     * @return transaction timeout at.
+     */
+    long getTimeoutAt();
 }

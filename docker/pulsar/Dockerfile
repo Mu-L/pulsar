@@ -26,16 +26,19 @@ ADD ${PULSAR_TARBALL} /
 RUN mv /apache-pulsar-* /pulsar
 
 COPY scripts/apply-config-from-env.py /pulsar/bin
+COPY scripts/apply-config-from-env-with-prefix.py /pulsar/bin
 COPY scripts/gen-yml-from-env.py /pulsar/bin
 COPY scripts/generate-zookeeper-config.sh /pulsar/bin
 COPY scripts/pulsar-zookeeper-ruok.sh /pulsar/bin
 COPY scripts/watch-znode.py /pulsar/bin
 COPY scripts/install-pulsar-client-37.sh /pulsar/bin
 
+RUN mkdir /pulsar/data
+
 ### Create 2nd stage from OpenJDK image
 ### and add Python dependencies (for Pulsar functions)
 
-FROM openjdk:8-jdk-slim
+FROM openjdk:11-jdk-slim
 
 # Install some utilities
 RUN apt-get update \
@@ -51,13 +54,8 @@ RUN python3.7 get-pip.py
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 10
 
+RUN echo networkaddress.cache.ttl=1 >> $JAVA_HOME/conf/security/java.security
 ADD target/python-client/ /pulsar/pulsar-client
-ADD target/cpp-client/ /pulsar/cpp-client
-RUN echo networkaddress.cache.ttl=1 >> $JAVA_HOME/jre/lib/security/java.security
-RUN apt-get update \
-     && apt install -y /pulsar/cpp-client/*.deb \
-     && apt-get clean \
-     && rm -rf /var/lib/apt/lists/*
 
 VOLUME  ["/pulsar/conf", "/pulsar/data"]
 

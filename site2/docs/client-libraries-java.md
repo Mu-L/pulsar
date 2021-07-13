@@ -107,7 +107,7 @@ String | `authParams` | String represents parameters for the authentication plug
 long|`operationTimeoutMs`|Operation timeout |30000
 long|`statsIntervalSeconds`|Interval between each stats info<br/><br/>Stats is activated with positive `statsInterval`<br/><br/>Set `statsIntervalSeconds` to 1 second at least |60
 int|`numIoThreads`| The number of threads used for handling connections to brokers | 1 
-int|`numListenerThreads`|The number of threads used for handling message listeners | 1 
+int|`numListenerThreads`|The number of threads used for handling message listeners. The listener thread pool is shared across all the consumers and readers using the "listener" model to get messages. For a given consumer, the listener is always invoked from the same thread to ensure ordering. If you want multiple threads to process a single topic, you need to create a [`shared`](https://pulsar.apache.org/docs/en/next/concepts-messaging/#shared) subscription and multiple consumers for this subscription. This does not ensure ordering.| 1 
 boolean|`useTcpNoDelay`|Whether to use TCP no-delay flag on the connection to disable Nagle algorithm |true
 boolean |`useTls` |Whether to use TLS encryption on the connection| false
 string | `tlsTrustCertsFilePath` |Path to the trusted TLS certificate file|None
@@ -121,7 +121,9 @@ int|`connectionTimeoutMs`|Duration of waiting for a connection to a broker to be
 int|`requestTimeoutMs`|Maximum duration for completing a request |60000
 int|`defaultBackoffIntervalNanos`| Default duration for a backoff interval | TimeUnit.MILLISECONDS.toNanos(100);
 long|`maxBackoffIntervalNanos`|Maximum duration for a backoff interval|TimeUnit.SECONDS.toNanos(30)
-
+SocketAddress|`socks5ProxyAddress`|SOCKS5 proxy address | None
+String|`socks5ProxyUsername`|SOCKS5 proxy username | None
+String|`socks5ProxyPassword`|SOCKS5 proxy password | None
 Check out the Javadoc for the {@inject: javadoc:PulsarClient:/client/org/apache/pulsar/client/api/PulsarClient} class for a full list of configurable parameters.
 
 > In addition to client-level configuration, you can also apply [producer](#configuring-producers) and [consumer](#configuring-consumers) specific configuration as described in sections below.
@@ -212,7 +214,7 @@ The following is an example.
 
 ```java
 producer.sendAsync("my-async-message".getBytes()).thenAccept(msgId -> {
-    System.out.printf("Message with ID %s successfully sent", msgId);
+    System.out.println("Message with ID " + msgId + " successfully sent");
 });
 ```
 
@@ -255,7 +257,7 @@ while (true) {
 
   try {
       // Do something with the message
-      System.out.printf("Message received: %s", new String(msg.getData()));
+      System.out.println("Message received: " + new String(msg.getData()));
 
       // Acknowledge the message so that it can be deleted by the message broker
       consumer.acknowledge(msg);
@@ -264,6 +266,25 @@ while (true) {
       consumer.negativeAcknowledge(msg);
   }
 }
+```
+        
+If you don't want to block your main thread and rather listen constantly for new messages, consider using a `MessageListener`.
+
+```java
+MessageListener myMessageListener = (consumer, msg) -> {
+  try {
+      System.out.println("Message received: " + new String(msg.getData()));
+      consumer.acknowledge(msg);
+  } catch (Exception e) {
+      consumer.negativeAcknowledge(msg);
+  }
+}
+
+Consumer consumer = client.newConsumer()
+     .topic("my-topic")
+     .subscriptionName("my-subscription")
+     .messageListener(myMessageListener)
+     .subscribe();
 ```
 
 ### Configure consumer
@@ -277,7 +298,7 @@ Type | Name| <div style="width:300px">Description</div>|  Default
 Set&lt;String&gt;|	`topicNames`|	Topic name|	Sets.newTreeSet()
 Pattern|   `topicsPattern`|	Topic pattern	|None
 String|	`subscriptionName`|	Subscription name|	None
-SubscriptionType| `subscriptionType`|	Subscription type <br/><br/>Three subscription types are available:<li>Exclusive</li><li>Failover</li><li>Shared</li>|SubscriptionType.Exclusive
+SubscriptionType| `subscriptionType`|	Subscription type <br/><br/>Four subscription types are available:<li>Exclusive</li><li>Failover</li><li>Shared</li><li>Key_Shared</li>|SubscriptionType.Exclusive
 int | `receiverQueueSize` | Size of a consumer's receiver queue. <br/><br/>For example, the number of messages accumulated by a consumer before an application calls `Receive`. <br/><br/>A value higher than the default value increases consumer throughput, though at the expense of more memory utilization.| 1000
 long|`acknowledgementsGroupTimeMicros`|Group a consumer acknowledgment for a specified time.<br/><br/>By default, a consumer uses 100ms grouping time to send out acknowledgments to a broker.<br/><br/>Setting a group time of 0 sends out acknowledgments immediately. <br/><br/>A longer ack group time is more efficient at the expense of a slight increase in message re-deliveries after a failure.|TimeUnit.MILLISECONDS.toMicros(100)
 long|`negativeAckRedeliveryDelayMicros`|Delay to wait before redelivering messages that failed to be processed.<br/><br/> When an application uses {@link Consumer#negativeAcknowledge(Message)}, failed messages are redelivered after a fixed timeout. |TimeUnit.MINUTES.toMicros(1)
@@ -667,6 +688,7 @@ In the example above, a `Reader` object is instantiated for a specific topic and
 
 The code sample above shows pointing the `Reader` object to a specific message (by ID), but you can also use `MessageId.earliest` to point to the earliest available message on the topic of `MessageId.latest` to point to the most recent available message.
 
+### Configure reader
 When you create a reader, you can use the `loadConf` configuration. The following parameters are available in `loadConf`.
 
 | Type | Name | <div style="width:300px">Description</div> | Default
@@ -674,7 +696,9 @@ When you create a reader, you can use the `loadConf` configuration. The followin
 String|`topicName`|Topic name. |None
 int|`receiverQueueSize`|Size of a consumer's receiver queue.<br/><br/>For example, the number of messages that can be accumulated by a consumer before an application calls `Receive`.<br/><br/>A value higher than the default value increases consumer throughput, though at the expense of more memory utilization.|1000
 ReaderListener&lt;T&gt;|`readerListener`|A listener that is called for message received.|None
-String|`readerName`|Read name.|null
+String|`readerName`|Reader name.|null
+String| `subscriptionName`|Subscription name|When there is a single topic, the default subscription name is `"reader-" + 10-digit UUID`.
+When there are multiple topics, the default subscription name is `"multiTopicsReader-" + 10-digit UUID`.
 String|`subscriptionRolePrefix`|Prefix of subscription role. |null
 CryptoKeyReader|`cryptoKeyReader`|Interface that abstracts the access to a key store.|null
 ConsumerCryptoFailureAction|`cryptoFailureAction`|Consumer should take action when it receives a message that can not be decrypted.<br/><br/><li>**FAIL**: this is the default option to fail messages until crypto succeeds.</li><br/><li> **DISCARD**: silently acknowledge and not deliver message to an application.</li><br/><li>**CONSUME**: deliver encrypted messages to applications. It is the application's responsibility to decrypt the message.<br/><br/>The message decompression fails. <br/><br/>If messages contain batch messages, a client is not be able to retrieve individual messages in batch.<br/><br/>Delivered encrypted message contains {@link EncryptionContext} which contains encryption and compression information in it using which application can decrypt consumed message payload.|ConsumerCryptoFailureAction.FAIL</li>

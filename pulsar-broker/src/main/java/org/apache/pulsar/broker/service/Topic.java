@@ -19,7 +19,6 @@
 package org.apache.pulsar.broker.service;
 
 import io.netty.buffer.ByteBuf;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -28,17 +27,15 @@ import org.apache.bookkeeper.mledger.Position;
 import org.apache.pulsar.broker.service.persistent.DispatchRateLimiter;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
-import org.apache.pulsar.broker.transaction.buffer.TransactionBuffer;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.transaction.TxnID;
-import org.apache.pulsar.common.api.proto.PulsarApi;
-import org.apache.pulsar.common.api.proto.PulsarApi.CommandSubscribe.InitialPosition;
-import org.apache.pulsar.common.api.proto.PulsarApi.CommandSubscribe.SubType;
-import org.apache.pulsar.common.api.proto.PulsarApi.MessageIdData;
+import org.apache.pulsar.common.api.proto.CommandSubscribe.InitialPosition;
+import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
+import org.apache.pulsar.common.api.proto.KeySharedMeta;
 import org.apache.pulsar.common.policies.data.BacklogQuota;
 import org.apache.pulsar.common.policies.data.PersistentTopicInternalStats;
 import org.apache.pulsar.common.policies.data.Policies;
-import org.apache.pulsar.common.policies.data.TopicStats;
+import org.apache.pulsar.common.policies.data.stats.TopicStatsImpl;
 import org.apache.pulsar.common.protocol.schema.SchemaData;
 import org.apache.pulsar.common.protocol.schema.SchemaVersion;
 import org.apache.pulsar.common.util.collections.ConcurrentOpenHashMap;
@@ -79,6 +76,9 @@ public interface Topic {
 
         void completed(Exception e, long ledgerId, long entryId);
 
+        default void setMetadataFromEntryData(ByteBuf entryData) {
+        }
+
         default long getHighestSequenceId() {
             return  -1L;
         }
@@ -95,6 +95,8 @@ public interface Topic {
             return  1L;
         }
     }
+
+    CompletableFuture<Void> initialize();
 
     void publishMessage(ByteBuf headersAndPayload, PublishContext callback);
 
@@ -121,7 +123,7 @@ public interface Topic {
                                           Map<String, String> metadata, boolean readCompacted,
                                           InitialPosition initialPosition,
                                           long startMessageRollbackDurationSec, boolean replicateSubscriptionState,
-                                          PulsarApi.KeySharedMeta keySharedMeta);
+                                          KeySharedMeta keySharedMeta);
 
     CompletableFuture<Subscription> createSubscription(String subscriptionName, InitialPosition initialPosition,
             boolean replicateSubscriptionState);
@@ -194,7 +196,7 @@ public interface Topic {
 
     ConcurrentOpenHashMap<String, ? extends Replicator> getReplicators();
 
-    TopicStats getStats(boolean getPreciseBacklog);
+    TopicStatsImpl getStats(boolean getPreciseBacklog, boolean subscriptionBacklogSize);
 
     CompletableFuture<PersistentTopicInternalStats> getInternalStats(boolean includeLedgerMetadata);
 
@@ -243,14 +245,6 @@ public interface Topic {
     /* ------ Transaction related ------ */
 
     /**
-     * Get the ${@link TransactionBuffer} of this Topic.
-     *
-     * @param createIfMissing Create the TransactionBuffer if missing.
-     * @return TransactionBuffer CompletableFuture
-     */
-    CompletableFuture<TransactionBuffer> getTransactionBuffer(boolean createIfMissing);
-
-    /**
      * Publish Transaction message to this Topic's TransactionBuffer.
      *
      * @param txnID             Transaction Id
@@ -264,8 +258,16 @@ public interface Topic {
      *
      * @param txnID Transaction id
      * @param txnAction Transaction action.
+     * @param lowWaterMark low water mark of this tc
      * @return
      */
-    CompletableFuture<Void> endTxn(TxnID txnID, int txnAction, List<MessageIdData> sendMessageIdList);
+    CompletableFuture<Void> endTxn(TxnID txnID, int txnAction, long lowWaterMark);
+
+    /**
+     * Truncate a topic.
+     * The truncate operation will move all cursors to the end of the topic and delete all inactive ledgers.
+     * @return
+     */
+    CompletableFuture<Void> truncate();
 
 }

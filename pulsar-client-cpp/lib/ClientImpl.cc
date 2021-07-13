@@ -26,17 +26,24 @@
 #include "PartitionedConsumerImpl.h"
 #include "MultiTopicsConsumerImpl.h"
 #include "PatternMultiTopicsConsumerImpl.h"
-#include "SimpleLoggerImpl.h"
+#include <pulsar/ConsoleLoggerFactory.h>
 #include <boost/algorithm/string/predicate.hpp>
 #include <sstream>
 #include <lib/HTTPLookupService.h>
 #include <lib/TopicName.h>
 #include <algorithm>
-#include <regex>
 #include <random>
 #include <mutex>
 #ifdef USE_LOG4CXX
 #include "Log4CxxLogger.h"
+#endif
+
+#ifdef PULSAR_USE_BOOST_REGEX
+#include <boost/regex.hpp>
+#define PULSAR_REGEX_NAMESPACE boost
+#else
+#include <regex>
+#define PULSAR_REGEX_NAMESPACE std
 #endif
 
 DECLARE_LOG_OBJECT()
@@ -82,6 +89,7 @@ ClientImpl::ClientImpl(const std::string& serviceUrl, const ClientConfiguration&
       state_(Open),
       serviceUrl_(serviceUrl),
       clientConfiguration_(detectTls(serviceUrl, clientConfiguration)),
+      memoryLimitController_(clientConfiguration.getMemoryLimit()),
       ioExecutorProvider_(std::make_shared<ExecutorServiceProvider>(clientConfiguration_.getIOThreads())),
       listenerExecutorProvider_(
           std::make_shared<ExecutorServiceProvider>(clientConfiguration_.getMessageListenerThreads())),
@@ -100,11 +108,11 @@ ClientImpl::ClientImpl(const std::string& serviceUrl, const ClientConfiguration&
             loggerFactory = Log4CxxLoggerFactory::create(clientConfiguration_.getLogConfFilePath());
         } else {
             // Use default simple console logger
-            loggerFactory = SimpleLoggerFactory::create();
+            loggerFactory.reset(new ConsoleLoggerFactory);
         }
 #else
         // Use default simple console logger
-        loggerFactory = SimpleLoggerFactory::create();
+        loggerFactory.reset(new ConsoleLoggerFactory);
 #endif
     }
     LogUtils::setLoggerFactory(std::move(loggerFactory));
@@ -116,13 +124,16 @@ ClientImpl::ClientImpl(const std::string& serviceUrl, const ClientConfiguration&
                                                 std::cref(clientConfiguration_.getAuthPtr()));
     } else {
         LOG_DEBUG("Using Binary Lookup");
-        lookupServicePtr_ = std::make_shared<BinaryProtoLookupService>(std::ref(pool_), std::ref(serviceUrl));
+        lookupServicePtr_ = std::make_shared<BinaryProtoLookupService>(
+            std::ref(pool_), std::ref(serviceUrl), std::cref(clientConfiguration_.getListenerName()));
     }
 }
 
 ClientImpl::~ClientImpl() { shutdown(); }
 
 const ClientConfiguration& ClientImpl::conf() const { return clientConfiguration_; }
+
+MemoryLimitController& ClientImpl::getMemoryLimitController() { return memoryLimitController_; }
 
 ExecutorServiceProviderPtr ClientImpl::getIOExecutorProvider() { return ioExecutorProvider_; }
 
@@ -263,7 +274,7 @@ void ClientImpl::createPatternMultiTopicsConsumer(const Result result, const Nam
     if (result == ResultOk) {
         ConsumerImplBasePtr consumer;
 
-        std::regex pattern(regexPattern);
+        PULSAR_REGEX_NAMESPACE::regex pattern(regexPattern);
 
         NamespaceTopicsPtr matchTopics =
             PatternMultiTopicsConsumerImpl::topicsPatternFilter(*topics, pattern);
@@ -476,8 +487,9 @@ void ClientImpl::closeAsync(CloseCallback callback) {
     state_ = Closing;
     lock.unlock();
 
-    LOG_INFO("Closing Pulsar client");
     SharedInt numberOfOpenHandlers = std::make_shared<int>(producers.size() + consumers.size());
+    LOG_INFO("Closing Pulsar client with " << producers.size() << " producers and " << consumers.size()
+                                           << " consumers");
 
     for (ProducersList::iterator it = producers.begin(); it != producers.end(); ++it) {
         ProducerImplBasePtr producer = it->lock();

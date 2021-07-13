@@ -136,6 +136,11 @@ static Result getResult(ServerError serverError) {
     return ResultUnknownError;
 }
 
+inline std::ostream& operator<<(std::ostream& os, ServerError error) {
+    os << getResult(error);
+    return os;
+}
+
 static bool file_exists(const std::string& path) {
     if (path.empty()) {
         return false;
@@ -170,6 +175,8 @@ ClientConnection::ClientConnection(const std::string& logicalAddress, const std:
       error_(boost::system::error_code()),
       incomingBuffer_(SharedBuffer::allocate(DefaultBufferSize)),
       incomingCmd_(),
+      connectTimeoutTask_(std::make_shared<PeriodicTask>(executor_->getIOService(),
+                                                         clientConfiguration.getConnectionTimeout())),
       pendingWriteBuffers_(),
       pendingWriteOperations_(0),
       outgoingBuffer_(SharedBuffer::allocate(DefaultBufferSize)),
@@ -184,7 +191,7 @@ ClientConnection::ClientConnection(const std::string& logicalAddress, const std:
 #if BOOST_VERSION >= 105400
         boost::asio::ssl::context ctx(boost::asio::ssl::context::tlsv12_client);
 #else
-        boost::asio::ssl::context ctx(executor_->io_service_, boost::asio::ssl::context::tlsv1_client);
+        boost::asio::ssl::context ctx(*executor_->io_service_, boost::asio::ssl::context::tlsv1_client);
 #endif
         Url serviceUrl;
         Url::parse(physicalAddress, serviceUrl);
@@ -369,6 +376,7 @@ void ClientConnection::handleTcpConnected(const boost::system::error_code& err,
             LOG_INFO(cnxString_ << "Connected to broker through proxy. Logical broker: " << logicalAddress_);
         }
         state_ = TcpConnected;
+        connectTimeoutTask_->stop();
         socket_->set_option(tcp::no_delay(true));
 
         socket_->set_option(tcp::socket::keep_alive(true));
@@ -409,7 +417,13 @@ void ClientConnection::handleTcpConnected(const boost::system::error_code& err,
         }
     } else if (endpointIterator != tcp::resolver::iterator()) {
         // The connection failed. Try the next endpoint in the list.
-        socket_->close();
+        boost::system::error_code err;
+        socket_->close(err);  // ignore the error of close
+        if (err) {
+            LOG_WARN(cnxString_ << "Failed to close socket: " << err.message());
+        }
+        connectTimeoutTask_->stop();
+        connectTimeoutTask_->start();
         tcp::endpoint endpoint = *endpointIterator;
         socket_->async_connect(endpoint, std::bind(&ClientConnection::handleTcpConnected, shared_from_this(),
                                                    std::placeholders::_1, ++endpointIterator));
@@ -495,6 +509,18 @@ void ClientConnection::handleResolve(const boost::system::error_code& err,
         return;
     }
 
+    auto self = shared_from_this();
+    connectTimeoutTask_->setCallback([this, self](const PeriodicTask::ErrorCode& ec) {
+        if (state_ != TcpConnected) {
+            LOG_ERROR(cnxString_ << "Connection was not established in " << connectTimeoutTask_->getPeriodMs()
+                                 << " ms, close the socket");
+            PeriodicTask::ErrorCode ignoredError;
+            socket_->close(ignoredError);
+        }
+        connectTimeoutTask_->stop();
+    });
+
+    connectTimeoutTask_->start();
     if (endpointIterator != tcp::resolver::iterator()) {
         LOG_DEBUG(cnxString_ << "Resolved hostname " << endpointIterator->host_name()  //
                              << " to " << endpointIterator->endpoint());
@@ -971,6 +997,7 @@ void ClientConnection::handleIncomingCommand() {
                     const CommandError& error = incomingCmd_.error();
                     Result result = getResult(error.error());
                     LOG_WARN(cnxString_ << "Received error response from server: " << result
+                                        << (error.has_message() ? (" (" + error.message() + ")") : "")
                                         << " -- req_id: " << error.request_id());
 
                     Lock lock(mutex_);
@@ -1186,8 +1213,9 @@ Future<Result, BrokerConsumerStatsImpl> ClientConnection::newConsumerStats(uint6
 }
 
 void ClientConnection::newTopicLookup(const std::string& topicName, bool authoritative,
-                                      const uint64_t requestId, LookupDataResultPromisePtr promise) {
-    newLookup(Commands::newLookup(topicName, authoritative, requestId), requestId, promise);
+                                      const std::string& listenerName, const uint64_t requestId,
+                                      LookupDataResultPromisePtr promise) {
+    newLookup(Commands::newLookup(topicName, authoritative, requestId, listenerName), requestId, promise);
 }
 
 void ClientConnection::newPartitionedMetadataLookup(const std::string& topicName, const uint64_t requestId,
@@ -1405,6 +1433,9 @@ void ClientConnection::close() {
     state_ = Disconnected;
     boost::system::error_code err;
     socket_->close(err);
+    if (err) {
+        LOG_WARN(cnxString_ << "Failed to close socket: " << err.message());
+    }
 
     if (tlsSocket_) {
         tlsSocket_->lowest_layer().close();
@@ -1434,6 +1465,8 @@ void ClientConnection::close() {
         consumerStatsRequestTimer_->cancel();
         consumerStatsRequestTimer_.reset();
     }
+
+    connectTimeoutTask_->stop();
 
     lock.unlock();
     LOG_INFO(cnxString_ << "Connection closed");

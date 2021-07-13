@@ -81,9 +81,14 @@ We use [Minikube](https://kubernetes.io/docs/getting-started-guides/minikube/) i
 
 3. Use the Pulsar Helm chart to install a Pulsar cluster to Kubernetes.
 
+   > **NOTE**  
+   > You need to specify `--set initialize=true` when installing Pulsar the first time. This command installs and starts Apache Pulsar.
+
     ```bash
     helm install \
         --values examples/values-minikube.yaml \
+        --set initialize=true \
+        --namespace pulsar \
         pulsar-mini apache/pulsar
     ```
 
@@ -244,9 +249,9 @@ Then you can proceed with the following steps:
 
     (2) Expose `PULSAR_HOME` as the environment variable.
 
-        ```bash
-        export PULSAR_HOME=$(pwd)
-        ```
+    ```bash
+    export PULSAR_HOME=$(pwd)
+    ```
 
 4. Configure the Pulsar client.
 

@@ -36,6 +36,7 @@ import com.google.common.collect.Sets;
 import java.lang.reflect.Field;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -68,11 +69,14 @@ import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.policies.data.AutoFailoverPolicyData;
+import org.apache.pulsar.common.policies.data.AutoFailoverPolicyDataImpl;
 import org.apache.pulsar.common.policies.data.AutoFailoverPolicyType;
 import org.apache.pulsar.common.policies.data.NamespaceIsolationData;
+import org.apache.pulsar.common.policies.data.NamespaceIsolationDataImpl;
 import org.apache.pulsar.common.policies.data.ResourceQuota;
 import org.apache.pulsar.common.policies.impl.NamespaceIsolationPolicies;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
+import org.apache.pulsar.metadata.api.MetadataStoreException.BadVersionException;
 import org.apache.pulsar.policies.data.loadbalancer.BrokerUsage;
 import org.apache.pulsar.policies.data.loadbalancer.JvmUsage;
 import org.apache.pulsar.policies.data.loadbalancer.NamespaceBundleStats;
@@ -84,14 +88,12 @@ import org.apache.pulsar.zookeeper.LocalZooKeeperCache;
 import org.apache.pulsar.zookeeper.ZooKeeperChildrenCache;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.ZooDefs;
-import org.apache.zookeeper.ZooKeeper;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-/**
- */
 @Slf4j
+@Test(groups = "broker")
 public class SimpleLoadManagerImplTest {
     LocalBookkeeperEnsemble bkEnsemble;
 
@@ -109,7 +111,7 @@ public class SimpleLoadManagerImplTest {
     String primaryHost;
     String secondaryHost;
 
-    ExecutorService executor = new ThreadPoolExecutor(5, 20, 30, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>());
+    ExecutorService executor = new ThreadPoolExecutor(5, 20, 30, TimeUnit.SECONDS, new LinkedBlockingQueue<>());
 
     @BeforeMethod
     void setup() throws Exception {
@@ -123,6 +125,7 @@ public class SimpleLoadManagerImplTest {
         config1.setClusterName("use");
         config1.setWebServicePort(Optional.of(0));
         config1.setZookeeperServers("127.0.0.1" + ":" + bkEnsemble.getZookeeperPort());
+        config1.setBrokerShutdownTimeoutMs(0L);
         config1.setBrokerServicePort(Optional.of(0));
         config1.setLoadManagerClassName(SimpleLoadManagerImpl.class.getName());
         config1.setBrokerServicePortTls(Optional.of(0));
@@ -141,6 +144,7 @@ public class SimpleLoadManagerImplTest {
         config2.setClusterName("use");
         config2.setWebServicePort(Optional.of(0));
         config2.setZookeeperServers("127.0.0.1" + ":" + bkEnsemble.getZookeeperPort());
+        config2.setBrokerShutdownTimeoutMs(0L);
         config2.setBrokerServicePort(Optional.of(0));
         config2.setLoadManagerClassName(SimpleLoadManagerImpl.class.getName());
         config2.setBrokerServicePortTls(Optional.of(0));
@@ -159,7 +163,7 @@ public class SimpleLoadManagerImplTest {
     @AfterMethod(alwaysRun = true)
     void shutdown() throws Exception {
         log.info("--- Shutting down ---");
-        executor.shutdown();
+        executor.shutdownNow();
 
         admin1.close();
         admin2.close();
@@ -171,34 +175,37 @@ public class SimpleLoadManagerImplTest {
     }
 
     private void createNamespacePolicies(PulsarService pulsar) throws Exception {
+        Map<String, String> parameters = new HashMap<>();
+        parameters.put("min_limit", "1");
+        parameters.put("usage_threshold", "100");
+
         NamespaceIsolationPolicies policies = new NamespaceIsolationPolicies();
         // set up policy that use this broker as primary
-        NamespaceIsolationData policyData = new NamespaceIsolationData();
-        policyData.namespaces = new ArrayList<String>();
-        policyData.namespaces.add("pulsar/use/primary-ns.*");
-        policyData.primary = new ArrayList<String>();
-        policyData.primary.add(pulsar1.getAdvertisedAddress() + "*");
-        policyData.secondary = new ArrayList<String>();
-        policyData.secondary.add("prod2-broker([78]).messaging.usw.example.co.*");
-        policyData.auto_failover_policy = new AutoFailoverPolicyData();
-        policyData.auto_failover_policy.policy_type = AutoFailoverPolicyType.min_available;
-        policyData.auto_failover_policy.parameters = new HashMap<String, String>();
-        policyData.auto_failover_policy.parameters.put("min_limit", "1");
-        policyData.auto_failover_policy.parameters.put("usage_threshold", "100");
+        NamespaceIsolationData policyData = NamespaceIsolationData.builder()
+                .namespaces(Collections.singletonList("pulsar/use/primary-ns.*"))
+                .primary(Collections.singletonList(pulsar1.getAdvertisedAddress() + "*"))
+                .secondary(Collections.singletonList("prod2-broker([78]).messaging.usw.example.co.*"))
+                .autoFailoverPolicy(AutoFailoverPolicyData.builder()
+                        .policyType(AutoFailoverPolicyType.min_available)
+                        .parameters(parameters)
+                        .build())
+                .build();
         policies.setPolicy("primaryBrokerPolicy", policyData);
 
-        ObjectMapper jsonMapper = ObjectMapperFactory.create();
-        ZooKeeper globalZk = pulsar.getGlobalZkCache().getZooKeeper();
-        ZkUtils.createFullPathOptimistic(globalZk, AdminResource.path("clusters", "use", "namespaceIsolationPolicies"),
-                new byte[0], ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        byte[] content = jsonMapper.writeValueAsBytes(policies.getPolicies());
-        globalZk.setData(AdminResource.path("clusters", "use", "namespaceIsolationPolicies"), content, -1);
-
+        String path = AdminResource.path("clusters", "use", "namespaceIsolationPolicies");
+        try {
+            pulsar.getPulsarResources().getNamespaceResources().getIsolationPolicies().create(path,
+                    policies.getPolicies());
+        } catch (BadVersionException e) {
+            // isolation policy already exist
+            pulsar.getPulsarResources().getNamespaceResources().getIsolationPolicies().set(path,
+                    data -> policies.getPolicies());
+        }
     }
 
-    @Test(enabled = true)
+    @Test
     public void testBasicBrokerSelection() throws Exception {
-        LoadManager loadManager = new SimpleLoadManagerImpl(pulsar1);
+        SimpleLoadManagerImpl loadManager = new SimpleLoadManagerImpl(pulsar1);
         PulsarResourceDescription rd = new PulsarResourceDescription();
         rd.put("memory", new ResourceUsage(1024, 4096));
         rd.put("cpu", new ResourceUsage(10, 100));
@@ -206,7 +213,7 @@ public class SimpleLoadManagerImplTest {
         rd.put("bandwidthOut", new ResourceUsage(550 * 1024, 1024 * 1024));
 
         ResourceUnit ru1 = new SimpleResourceUnit("http://prod2-broker7.messaging.usw.example.com:8080", rd);
-        Set<ResourceUnit> rus = new HashSet<ResourceUnit>();
+        Set<ResourceUnit> rus = new HashSet<>();
         rus.add(ru1);
         LoadRanker lr = new ResourceAvailabilityRanker();
         AtomicReference<Map<Long, Set<ResourceUnit>>> sortedRankingsInstance = new AtomicReference<>(Maps.newTreeMap());
@@ -216,7 +223,7 @@ public class SimpleLoadManagerImplTest {
         sortedRankings.setAccessible(true);
         sortedRankings.set(loadManager, sortedRankingsInstance);
 
-        Optional<ResourceUnit> res = ((SimpleLoadManagerImpl) loadManager)
+        Optional<ResourceUnit> res = loadManager
                 .getLeastLoaded(NamespaceName.get("pulsar/use/primary-ns.10"));
         // broker is not active so found should be null
         assertEquals(res, Optional.empty(), "found a broker when expected none to be found");
@@ -230,10 +237,10 @@ public class SimpleLoadManagerImplTest {
         field.set(objInstance, newValue);
     }
 
-    @Test(enabled = true)
+    @Test
     public void testPrimary() throws Exception {
         createNamespacePolicies(pulsar1);
-        LoadManager loadManager = new SimpleLoadManagerImpl(pulsar1);
+        SimpleLoadManagerImpl loadManager = new SimpleLoadManagerImpl(pulsar1);
         PulsarResourceDescription rd = new PulsarResourceDescription();
         rd.put("memory", new ResourceUsage(1024, 4096));
         rd.put("cpu", new ResourceUsage(10, 100));
@@ -242,7 +249,7 @@ public class SimpleLoadManagerImplTest {
 
         ResourceUnit ru1 = new SimpleResourceUnit(
                 "http://" + pulsar1.getAdvertisedAddress() + ":" + pulsar1.getConfiguration().getWebServicePort().get(), rd);
-        Set<ResourceUnit> rus = new HashSet<ResourceUnit>();
+        Set<ResourceUnit> rus = new HashSet<>();
         rus.add(ru1);
         LoadRanker lr = new ResourceAvailabilityRanker();
 
@@ -263,7 +270,7 @@ public class SimpleLoadManagerImplTest {
         sortedRankingsInstance.get().put(lr.getRank(rd), rus);
         setObjectField(SimpleLoadManagerImpl.class, loadManager, "sortedRankings", sortedRankingsInstance);
 
-        ResourceUnit found = ((SimpleLoadManagerImpl) loadManager)
+        ResourceUnit found = loadManager
                 .getLeastLoaded(NamespaceName.get("pulsar/use/primary-ns.10")).get();
         // broker is not active so found should be null
         assertNotEquals(found, null, "did not find a broker when expected one to be found");
@@ -300,7 +307,7 @@ public class SimpleLoadManagerImplTest {
         log.info("lzk mocked active brokers are {}",
                 availableActiveBrokers.get(SimpleLoadManagerImpl.LOADBALANCE_BROKERS_ROOT));
 
-        LoadManager loadManager = new SimpleLoadManagerImpl(pulsar1);
+        SimpleLoadManagerImpl loadManager = new SimpleLoadManagerImpl(pulsar1);
 
         PulsarResourceDescription rd = new PulsarResourceDescription();
         rd.put("memory", new ResourceUsage(1024, 4096));
@@ -309,7 +316,7 @@ public class SimpleLoadManagerImplTest {
         rd.put("bandwidthOut", new ResourceUsage(550 * 1024, 1024 * 1024));
 
         ResourceUnit ru1 = new SimpleResourceUnit("http://prod2-broker7.messaging.usw.example.com:8080", rd);
-        Set<ResourceUnit> rus = new HashSet<ResourceUnit>();
+        Set<ResourceUnit> rus = new HashSet<>();
         rus.add(ru1);
         LoadRanker lr = new ResourceAvailabilityRanker();
         AtomicReference<Map<Long, Set<ResourceUnit>>> sortedRankingsInstance = new AtomicReference<>(Maps.newTreeMap());
@@ -319,7 +326,7 @@ public class SimpleLoadManagerImplTest {
         sortedRankings.setAccessible(true);
         sortedRankings.set(loadManager, sortedRankingsInstance);
 
-        ResourceUnit found = ((SimpleLoadManagerImpl) loadManager)
+        ResourceUnit found = loadManager
                 .getLeastLoaded(NamespaceName.get("pulsar/use/primary-ns.10")).get();
         assertEquals(found.getResourceId(), ru1.getResourceId());
 
@@ -372,7 +379,7 @@ public class SimpleLoadManagerImplTest {
 
     @Test(enabled = true)
     public void testDoLoadShedding() throws Exception {
-        LoadManager loadManager = spy(new SimpleLoadManagerImpl(pulsar1));
+        SimpleLoadManagerImpl loadManager = spy(new SimpleLoadManagerImpl(pulsar1));
         PulsarResourceDescription rd = new PulsarResourceDescription();
         rd.put("memory", new ResourceUsage(1024, 4096));
         rd.put("cpu", new ResourceUsage(10, 100));
@@ -381,7 +388,7 @@ public class SimpleLoadManagerImplTest {
 
         ResourceUnit ru1 = new SimpleResourceUnit("http://pulsar-broker1.com:8080", rd);
         ResourceUnit ru2 = new SimpleResourceUnit("http://pulsar-broker2.com:8080", rd);
-        Set<ResourceUnit> rus = new HashSet<ResourceUnit>();
+        Set<ResourceUnit> rus = new HashSet<>();
         rus.add(ru1);
         rus.add(ru2);
         LoadRanker lr = new ResourceAvailabilityRanker();
@@ -414,7 +421,7 @@ public class SimpleLoadManagerImplTest {
         loadReports.put(ru2, loadReport2);
         setObjectField(SimpleLoadManagerImpl.class, loadManager, "currentLoadReports", loadReports);
 
-        ((SimpleLoadManagerImpl) loadManager).doLoadShedding();
+        loadManager.doLoadShedding();
         verify(loadManager, atLeastOnce()).doLoadShedding();
     }
 
@@ -503,14 +510,14 @@ public class SimpleLoadManagerImplTest {
     @Test
     public void testUsage() {
         Map<String, Object> metrics = Maps.newHashMap();
-        metrics.put("brk_conn_cnt", new Long(1));
-        metrics.put("brk_repl_conn_cnt", new Long(1));
-        metrics.put("jvm_thread_cnt", new Long(1));
+        metrics.put("brk_conn_cnt", 1L);
+        metrics.put("brk_repl_conn_cnt", 1L);
+        metrics.put("jvm_thread_cnt", 1L);
         BrokerUsage brokerUsage = BrokerUsage.populateFrom(metrics);
         assertEquals(brokerUsage.getConnectionCount(), 1);
         assertEquals(brokerUsage.getReplicationConnectionCount(), 1);
-        JvmUsage jvmUage = JvmUsage.populateFrom(metrics);
-        assertEquals(jvmUage.getThreadCount(), 1);
+        JvmUsage jvmUsage = JvmUsage.populateFrom(metrics);
+        assertEquals(jvmUsage.getThreadCount(), 1);
         SystemResourceUsage usage = new SystemResourceUsage();
         double usageLimit = 10.0;
         usage.setBandwidthIn(new ResourceUsage(usageLimit, usageLimit));

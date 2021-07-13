@@ -5,6 +5,10 @@ sidebar_label: Pulsar Admin CLI
 original_id: pulsar-admin
 ---
 
+> **Important**
+>
+> This page is deprecated and not updated anymore. For the latest and complete information about `pulsar-admin`, including commands, flags, descriptions, and more, see [pulsar-admin doc](https://pulsar.apache.org/tools/pulsar-admin/).
+
 The `pulsar-admin` tool enables you to manage Pulsar installations, including clusters, brokers, namespaces, tenants, and more.
 
 Usage
@@ -862,6 +866,8 @@ Subcommands
 * `get-subscribe-rate`
 * `set-subscription-dispatch-rate`
 * `get-subscription-dispatch-rate`
+* `set-subscription-expiration-time`
+* `get-subscription-expiration-time`
 * `clear-backlog`
 * `unsubscribe`
 * `set-encryption-required`
@@ -1164,7 +1170,7 @@ $ pulsar-admin namespaces set-message-ttl tenant/namespace options
 Options
 |Flag|Description|Default|
 |----|---|---|
-|`-ttl`, `--messageTTL`|Message TTL in seconds|0|
+|`-ttl`, `--messageTTL`|Message TTL in seconds. When the value is set to `0`, TTL is disabled. TTL is disabled by default. |0|
 
 ### `get-anti-affinity-group`
 Get Anti-affinity group name for a namespace
@@ -1349,6 +1355,27 @@ Get subscription configured message-dispatch-rate for all topics of the namespac
 Usage
 ```bash
 $ pulsar-admin namespaces get-subscription-dispatch-rate tenant/namespace
+```
+
+### `set-subscription-expiration-time`
+Set the subscription expiration time for a namespace (in minutes).
+
+Usage
+```bash
+$ pulsar-admin namespaces set-subscription-expiration-time tenant/namespace options
+```
+
+Options
+|Flag|Description|Default|
+|----|---|---|
+|`-t`, `--time`|Subscription expiration time in minutes|0|
+
+### `get-subscription-expiration-time`
+Get the subscription expiration time for a namespace (in minutes).
+
+Usage
+```bash
+$ pulsar-admin namespaces get-subscription-expiration-time tenant/namespace
 ```
 
 ### `clear-backlog`

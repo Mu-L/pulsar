@@ -45,14 +45,20 @@ public class SimpleConsumerSocket {
     private Session session;
     private final ArrayList<String> consumerBuffer;
     private final AtomicInteger receivedMessages = new AtomicInteger();
+    // Custom message handler to override standard message processing, if it's needed
+    private SimpleConsumerMessageHandler customMessageHandler;
 
     public SimpleConsumerSocket() {
         this.closeLatch = new CountDownLatch(1);
-        consumerBuffer = new ArrayList<String>();
+        consumerBuffer = new ArrayList<>();
     }
 
     public boolean awaitClose(int duration, TimeUnit unit) throws InterruptedException {
         return this.closeLatch.await(duration, unit);
+    }
+
+    public void setMessageHandler(SimpleConsumerMessageHandler handler) {
+        customMessageHandler = handler;
     }
 
     @OnWebSocketClose
@@ -73,12 +79,20 @@ public class SimpleConsumerSocket {
     public synchronized void onMessage(String msg) throws JsonParseException, IOException {
         receivedMessages.incrementAndGet();
         JsonObject message = new Gson().fromJson(msg, JsonObject.class);
-        JsonObject ack = new JsonObject();
-        String messageId = message.get(X_PULSAR_MESSAGE_ID).getAsString();
-        consumerBuffer.add(messageId);
-        ack.add("messageId", new JsonPrimitive(messageId));
-        // Acking the proxy
-        this.getRemote().sendString(ack.toString());
+        if (message.get(X_PULSAR_MESSAGE_ID) != null) {
+            String messageId = message.get(X_PULSAR_MESSAGE_ID).getAsString();
+            consumerBuffer.add(messageId);
+            if (customMessageHandler != null) {
+                this.getRemote().sendString(customMessageHandler.handle(messageId, message));
+            } else {
+                JsonObject ack = new JsonObject();
+                ack.add("messageId", new JsonPrimitive(messageId));
+                // Acking the proxy
+                this.getRemote().sendString(ack.toString());
+            }
+        } else {
+            consumerBuffer.add(message.toString());
+        }
     }
 
     public void sendPermits(int nbPermits) throws IOException {
@@ -94,6 +108,12 @@ public class SimpleConsumerSocket {
         this.getRemote().sendString(message.toString());
     }
 
+    public void isEndOfTopic() throws IOException {
+        JsonObject message = new JsonObject();
+        message.add("type", new JsonPrimitive("isEndOfTopic"));
+        this.getRemote().sendString(message.toString());
+    }
+
     public RemoteEndpoint getRemote() {
         return this.session.getRemote();
     }
@@ -105,7 +125,7 @@ public class SimpleConsumerSocket {
     public synchronized ArrayList<String> getBuffer() {
         return consumerBuffer;
     }
-    
+
     public int getReceivedMessagesCount() {
         return receivedMessages.get();
     }

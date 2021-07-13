@@ -44,13 +44,14 @@ import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.bookkeeper.mledger.impl.PositionImpl;
 import org.apache.pulsar.client.api.RawMessage;
 import org.apache.pulsar.client.impl.RawMessageImpl;
-import org.apache.pulsar.common.api.proto.PulsarApi.MessageIdData;
+import org.apache.pulsar.common.api.proto.MessageIdData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class CompactedTopicImpl implements CompactedTopic {
-    final static long NEWER_THAN_COMPACTED = -0xfeed0fbaL;
-    final static int DEFAULT_STARTPOINT_CACHE_SIZE = 100;
+    static final long NEWER_THAN_COMPACTED = -0xfeed0fbaL;
+    static final long COMPACT_LEDGER_EMPTY = -0xfeed0fbbL;
+    static final int DEFAULT_STARTPOINT_CACHE_SIZE = 100;
 
     private final BookKeeper bk;
 
@@ -86,13 +87,21 @@ public class CompactedTopicImpl implements CompactedTopic {
             PositionImpl cursorPosition = (PositionImpl) cursor.getReadPosition();
             if (compactionHorizon == null
                 || compactionHorizon.compareTo(cursorPosition) < 0) {
-                cursor.asyncReadEntriesOrWait(numberOfEntriesToRead, callback, ctx);
+                cursor.asyncReadEntriesOrWait(numberOfEntriesToRead, callback, ctx, PositionImpl.latest);
             } else {
                 compactedTopicContext.thenCompose(
                     (context) -> findStartPoint(cursorPosition, context.ledger.getLastAddConfirmed(), context.cache)
                         .thenCompose((startPoint) -> {
+                            // do not need to read the compaction ledger if it is empty.
+                            // the cursor just needs to be set to the compaction horizon
+                            if (startPoint == COMPACT_LEDGER_EMPTY) {
+                                cursor.seek(compactionHorizon.getNext());
+                                callback.readEntriesComplete(Collections.emptyList(), ctx);
+                                return CompletableFuture.completedFuture(null);
+                            }
                             if (startPoint == NEWER_THAN_COMPACTED && compactionHorizon.compareTo(cursorPosition) < 0) {
-                                cursor.asyncReadEntriesOrWait(numberOfEntriesToRead, callback, ctx);
+                                cursor.asyncReadEntriesOrWait(numberOfEntriesToRead, callback, ctx,
+                                        PositionImpl.latest);
                                 return CompletableFuture.completedFuture(null);
                             } else {
                                 long endPoint = Math.min(context.ledger.getLastAddConfirmed(),
@@ -100,6 +109,7 @@ public class CompactedTopicImpl implements CompactedTopic {
                                 if (startPoint == NEWER_THAN_COMPACTED) {
                                     cursor.seek(compactionHorizon.getNext());
                                     callback.readEntriesComplete(Collections.emptyList(), ctx);
+                                    return CompletableFuture.completedFuture(null);
                                 }
                                 return readEntries(context.ledger, startPoint, endPoint)
                                     .thenAccept((entries) -> {
@@ -126,7 +136,12 @@ public class CompactedTopicImpl implements CompactedTopic {
                                                   long lastEntryId,
                                                   AsyncLoadingCache<Long, MessageIdData> cache) {
         CompletableFuture<Long> promise = new CompletableFuture<>();
-        findStartPointLoop(p, 0, lastEntryId, promise, cache);
+        // if lastEntryId is less than zero it means there are no entries in the compact ledger
+        if (lastEntryId < 0) {
+            promise.complete(COMPACT_LEDGER_EMPTY);
+        } else {
+            findStartPointLoop(p, 0, lastEntryId, promise, cache);
+        }
         return promise;
     }
 

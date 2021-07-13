@@ -26,9 +26,14 @@ import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
-import org.apache.pulsar.broker.service.*;
-import org.apache.pulsar.common.api.proto.PulsarApi;
-import org.apache.pulsar.common.api.proto.PulsarApi.KeySharedMeta;
+import org.apache.pulsar.broker.service.BrokerService;
+import org.apache.pulsar.broker.service.Consumer;
+import org.apache.pulsar.broker.service.EntryBatchIndexesAcks;
+import org.apache.pulsar.broker.service.EntryBatchSizes;
+import org.apache.pulsar.broker.service.RedeliveryTracker;
+import org.apache.pulsar.common.api.proto.KeySharedMeta;
+import org.apache.pulsar.common.api.proto.KeySharedMode;
+import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.Markers;
 import org.mockito.ArgumentCaptor;
@@ -48,13 +53,25 @@ import java.util.Optional;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.apache.pulsar.common.protocol.Commands.serializeMetadataAndPayload;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.anyInt;
+import static org.mockito.Mockito.anyList;
+import static org.mockito.Mockito.anyLong;
+import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.argThat;
+import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.fail;
 
 @PrepareForTest({ DispatchRateLimiter.class })
 @PowerMockIgnore({"org.apache.logging.log4j.*"})
+@Test(groups = "broker")
 public class PersistentStickyKeyDispatcherMultipleConsumersTest {
 
     private PulsarService pulsarMock;
@@ -124,7 +141,8 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         ).thenReturn(false);
 
         persistentDispatcher = new PersistentStickyKeyDispatcherMultipleConsumers(
-                topicMock, cursorMock, subscriptionMock, configMock, KeySharedMeta.getDefaultInstance());
+                topicMock, cursorMock, subscriptionMock, configMock,
+                new KeySharedMeta().setKeySharedMode(KeySharedMode.AUTO_SPLIT));
     }
 
     @Test
@@ -168,13 +186,14 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
 
     @Test(timeOut = 10000)
     public void testSendMessage() {
-        KeySharedMeta keySharedMeta = KeySharedMeta.newBuilder().setKeySharedMode(PulsarApi.KeySharedMode.STICKY).build();
+        KeySharedMeta keySharedMeta = new KeySharedMeta().setKeySharedMode(KeySharedMode.STICKY);
         PersistentStickyKeyDispatcherMultipleConsumers persistentDispatcher = new PersistentStickyKeyDispatcherMultipleConsumers(
                 topicMock, cursorMock, subscriptionMock, configMock, keySharedMeta);
         try {
-            PulsarApi.IntRange.newBuilder().setStart(0).setEnd(9).build();
-            keySharedMeta = PulsarApi.KeySharedMeta.newBuilder().setKeySharedMode(PulsarApi.KeySharedMode.STICKY)
-                    .addHashRanges(PulsarApi.IntRange.newBuilder().setStart(0).setEnd(9).build()).build();
+            keySharedMeta.addHashRange()
+                    .setStart(0)
+                    .setEnd(9);
+
             Consumer consumerMock = mock(Consumer.class);
             doReturn(keySharedMeta).when(consumerMock).getKeySharedMeta();
             persistentDispatcher.addConsumer(consumerMock);
@@ -217,7 +236,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
                 return null;
             }).when(cursorMock).asyncReadEntriesOrWait(
                     anyInt(), anyLong(), any(PersistentStickyKeyDispatcherMultipleConsumers.class),
-                    eq(PersistentStickyKeyDispatcherMultipleConsumers.ReadType.Normal));
+                    eq(PersistentStickyKeyDispatcherMultipleConsumers.ReadType.Normal), any());
         } catch (Exception e) {
             fail("Failed to set to field", e);
         }
@@ -284,12 +303,12 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
     }
 
     private ByteBuf createMessage(String message, int sequenceId, String key) {
-        PulsarApi.MessageMetadata.Builder messageMetadata = PulsarApi.MessageMetadata.newBuilder();
-        messageMetadata.setSequenceId(sequenceId);
-        messageMetadata.setProducerName("testProducer");
-        messageMetadata.setPartitionKey(key);
-        messageMetadata.setPartitionKeyB64Encoded(false);
-        messageMetadata.setPublishTime(System.currentTimeMillis());
-        return serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, messageMetadata.build(), Unpooled.copiedBuffer(message.getBytes(UTF_8)));
+        MessageMetadata messageMetadata = new MessageMetadata()
+                .setSequenceId(sequenceId)
+                .setProducerName("testProducer")
+                .setPartitionKey(key)
+                .setPartitionKeyB64Encoded(false)
+                .setPublishTime(System.currentTimeMillis());
+        return serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, messageMetadata, Unpooled.copiedBuffer(message.getBytes(UTF_8)));
     }
 }

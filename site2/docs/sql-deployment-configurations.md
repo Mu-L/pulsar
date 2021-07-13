@@ -14,7 +14,7 @@ You can configure Presto Pulsar Connector in the `${project.root}/conf/presto/ca
 connector.name=pulsar
 
 # the url of Pulsar broker service
-pulsar.broker-service-url=http://localhost:8080
+pulsar.web-service-url=http://localhost:8080
 
 # URI of Zookeeper cluster
 pulsar.zookeeper-uri=localhost:2181
@@ -26,10 +26,10 @@ pulsar.entry-read-batch-size=100
 pulsar.target-num-splits=4
 ```
 
-You can connect Presto to a Pulsar cluster with multiple hosts. To configure multiple hosts for brokers, add multiple URLs to `pulsar.broker-service-url`. To configure multiple hosts for ZooKeeper, add multiple URIs to `pulsar.zookeeper-uri`. The following is an example.
+You can connect Presto to a Pulsar cluster with multiple hosts. To configure multiple hosts for brokers, add multiple URLs to `pulsar.web-service-url`. To configure multiple hosts for ZooKeeper, add multiple URIs to `pulsar.zookeeper-uri`. The following is an example.
   
 ```
-pulsar.broker-service-url=http://localhost:8080,localhost:8081,localhost:8082
+pulsar.web-service-url=http://localhost:8080,localhost:8081,localhost:8082
 pulsar.zookeeper-uri=localhost1,localhost2:2181
 ```
 
@@ -43,7 +43,7 @@ $ wget pulsar:binary_release_url
 
 ## Deploy a new cluster
 
-Since Pulsar SQL is powered by [Presto](https://prestosql.io), the configuration for deployment is the same for the Pulsar SQL worker. 
+Since Pulsar SQL is powered by [Trino (formerly Presto SQL)](https://trino.io), the configuration for deployment is the same for the Pulsar SQL worker. 
 
 > Note  
 > For how to set up a standalone single node environment, refer to [Query data](sql-getting-started.md). 
@@ -90,7 +90,7 @@ $ ./bin/pulsar sql-worker run --etc-dir /tmp/incubator-pulsar/conf/presto --data
 You can start the worker as daemon process.
 
 ```bash
-$ ./bin sql-worker start
+$ ./bin/pulsar sql-worker start
 ```
 
 ### Deploy a cluster on multiple nodes 
@@ -121,7 +121,7 @@ query.max-memory-per-node=1GB
 discovery.uri=<coordinator-url>
 ```
 
-2. Modify `pulsar.broker-service-url` and  `pulsar.zookeeper-uri` configuration in the `${project.root}/conf/presto/catalog/pulsar.properties` file accordingly for the three nodes.
+2. Modify `pulsar.web-service-url` and  `pulsar.zookeeper-uri` configuration in the `${project.root}/conf/presto/catalog/pulsar.properties` file accordingly for the three nodes.
 
 3. Start the coordinator node.
 
@@ -152,7 +152,7 @@ presto> SELECT * FROM system.runtime.nodes;
  2       | http://192.168.2.3:8081 | testversion  | false       | active 
 ```
 
-For more information about deployment in Presto, refer to [Presto deployment](https://prestosql.io/docs/current/installation/deployment.html).
+For more information about deployment in Presto, refer to [Presto deployment](https://trino.io/docs/current/installation/deployment.html).
 
 > Note  
 > The broker does not advance LAC, so when Pulsar SQL bypass broker to query data, it can only read entries up to the LAC that all the bookies learned. You can enable periodically write LAC on the broker by setting "bookkeeperExplicitLacIntervalInMills" in the broker.conf.

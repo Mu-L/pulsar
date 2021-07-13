@@ -19,11 +19,19 @@
 package org.apache.pulsar.common.policies.data;
 
 import com.google.common.collect.Maps;
+
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
+import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
+import org.apache.pulsar.common.policies.data.impl.BacklogQuotaImpl;
+import org.apache.pulsar.common.policies.data.impl.DispatchRateImpl;
 
 
 /**
@@ -33,9 +41,11 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@Getter
+@Setter
 public class TopicPolicies {
 
-    private Map<String, BacklogQuota> backLogQuotaMap = Maps.newHashMap();
+    private Map<String, BacklogQuotaImpl> backLogQuotaMap = Maps.newHashMap();
     private PersistencePolicies persistence = null;
     private RetentionPolicies retentionPolicies = null;
     private Boolean deduplicationEnabled = null;
@@ -47,16 +57,22 @@ public class TopicPolicies {
     private Integer maxUnackedMessagesOnSubscription = null;
     private Long delayedDeliveryTickTimeMillis = null;
     private Boolean delayedDeliveryEnabled = null;
-    private OffloadPolicies offloadPolicies;
+    private OffloadPoliciesImpl offloadPolicies;
     private InactiveTopicPolicies inactiveTopicPolicies = null;
-    private DispatchRate dispatchRate = null;
-    private DispatchRate subscriptionDispatchRate = null;
+    private DispatchRateImpl dispatchRate = null;
+    private DispatchRateImpl subscriptionDispatchRate = null;
     private Long compactionThreshold = null;
     private PublishRate publishRate = null;
     private SubscribeRate subscribeRate = null;
     private Integer deduplicationSnapshotIntervalSeconds = null;
     private Integer maxMessageSize = null;
     private Integer maxSubscriptionsPerTopic = null;
+    private DispatchRateImpl replicatorDispatchRate = null;
+    private List<SubType> subscriptionTypesEnabled = new ArrayList<>();
+
+    public boolean isReplicatorDispatchRateSet() {
+        return replicatorDispatchRate != null;
+    }
 
     public boolean isMaxSubscriptionsPerTopicSet() {
         return maxSubscriptionsPerTopic != null;

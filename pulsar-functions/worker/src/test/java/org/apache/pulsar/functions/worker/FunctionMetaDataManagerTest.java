@@ -18,16 +18,32 @@
  */
 package org.apache.pulsar.functions.worker;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.anyBoolean;
+import static org.mockito.Mockito.anyInt;
+import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
-import org.apache.pulsar.client.api.*;
+import org.apache.pulsar.client.api.CompressionType;
+import org.apache.pulsar.client.api.Message;
+import org.apache.pulsar.client.api.Producer;
+import org.apache.pulsar.client.api.ProducerBuilder;
+import org.apache.pulsar.client.api.PulsarClient;
+import org.apache.pulsar.client.api.PulsarClientException;
+import org.apache.pulsar.client.api.TypedMessageBuilder;
 import org.apache.pulsar.functions.proto.Function;
 import org.apache.pulsar.functions.proto.Request;
 import org.testng.Assert;
@@ -41,6 +57,11 @@ public class FunctionMetaDataManagerTest {
         ProducerBuilder<byte[]> builder = mock(ProducerBuilder.class);
         when(builder.topic(anyString())).thenReturn(builder);
         when(builder.producerName(anyString())).thenReturn(builder);
+        when(builder.enableBatching(anyBoolean())).thenReturn(builder);
+        when(builder.blockIfQueueFull(anyBoolean())).thenReturn(builder);
+        when(builder.compressionType(any(CompressionType.class))).thenReturn(builder);
+        when(builder.sendTimeout(anyInt(), any(TimeUnit.class))).thenReturn(builder);
+        when(builder.accessMode(any())).thenReturn(builder);
 
         Producer producer = mock(Producer.class);
         TypedMessageBuilder messageBuilder = mock(TypedMessageBuilder.class);
@@ -54,6 +75,7 @@ public class FunctionMetaDataManagerTest {
         when(producer.newMessage()).thenReturn(messageBuilder);
 
         when(builder.create()).thenReturn(producer);
+        when(builder.createAsync()).thenReturn(CompletableFuture.completedFuture(producer));
 
         PulsarClient client = mock(PulsarClient.class);
         when(client.newProducer()).thenReturn(builder);
@@ -100,16 +122,16 @@ public class FunctionMetaDataManagerTest {
     }
 
     @Test
-    public void testUpdateIfLeaderFunctionWithoutCompaction() throws PulsarClientException {
+    public void testUpdateIfLeaderFunctionWithoutCompaction() throws Exception {
         testUpdateIfLeaderFunction(false);
     }
 
     @Test
-    public void testUpdateIfLeaderFunctionWithCompaction() throws PulsarClientException {
+    public void testUpdateIfLeaderFunctionWithCompaction() throws Exception {
         testUpdateIfLeaderFunction(true);
     }
 
-    private void testUpdateIfLeaderFunction(boolean compact) throws PulsarClientException {
+    private void testUpdateIfLeaderFunction(boolean compact) throws Exception {
 
         WorkerConfig workerConfig = new WorkerConfig();
         workerConfig.setWorkerId("worker-1");
@@ -131,7 +153,8 @@ public class FunctionMetaDataManagerTest {
         }
 
         // become leader
-        functionMetaDataManager.acquireLeadership();
+        Producer<byte[]> exclusiveProducer = functionMetaDataManager.acquireExclusiveWrite(() -> true);
+        functionMetaDataManager.acquireLeadership(exclusiveProducer);
         // Now w should be able to really update
         functionMetaDataManager.updateFunctionOnLeader(m1, false);
         if (compact) {
@@ -158,16 +181,16 @@ public class FunctionMetaDataManagerTest {
     }
 
     @Test
-    public void deregisterFunctionWithoutCompaction() throws PulsarClientException {
+    public void deregisterFunctionWithoutCompaction() throws Exception {
         deregisterFunction(false);
     }
 
     @Test
-    public void deregisterFunctionWithCompaction() throws PulsarClientException {
+    public void deregisterFunctionWithCompaction() throws Exception {
         deregisterFunction(true);
     }
 
-    private void deregisterFunction(boolean compact) throws PulsarClientException {
+    private void deregisterFunction(boolean compact) throws Exception {
         SchedulerManager mockedScheduler = mock(SchedulerManager.class);
         WorkerConfig workerConfig = new WorkerConfig();
         workerConfig.setWorkerId("worker-1");
@@ -190,7 +213,8 @@ public class FunctionMetaDataManagerTest {
         }
 
         // become leader
-        functionMetaDataManager.acquireLeadership();
+        Producer<byte[]> exclusiveProducer = functionMetaDataManager.acquireExclusiveWrite(() -> true);
+        functionMetaDataManager.acquireLeadership(exclusiveProducer);
         verify(mockedScheduler, times(0)).schedule();
         // Now try deleting
         functionMetaDataManager.updateFunctionOnLeader(m1, true);

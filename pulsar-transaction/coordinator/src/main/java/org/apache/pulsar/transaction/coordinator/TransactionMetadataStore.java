@@ -22,7 +22,9 @@ import com.google.common.annotations.Beta;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import org.apache.pulsar.client.api.transaction.TxnID;
-import org.apache.pulsar.transaction.coordinator.proto.PulsarTransactionMetadata.TxnStatus;
+import org.apache.pulsar.common.policies.data.TransactionCoordinatorStats;
+import org.apache.pulsar.transaction.coordinator.impl.TransactionMetadataStoreStats;
+import org.apache.pulsar.transaction.coordinator.proto.TxnStatus;
 
 /**
  * A store for storing all the transaction metadata.
@@ -38,7 +40,7 @@ public interface TransactionMetadataStore {
      *         it returns {@link TxnStatus} of the given transaction.
      */
     default CompletableFuture<TxnStatus> getTxnStatus(TxnID txnid) {
-        return getTxnMeta(txnid).thenApply(txnMeta -> txnMeta.status());
+        return getTxnMeta(txnid).thenApply(TxnMeta::status);
     }
 
     /**
@@ -89,10 +91,19 @@ public interface TransactionMetadataStore {
      * @param txnid {@link TxnID} for update txn status
      * @param newStatus the new txn status that the transaction should be updated to
      * @param expectedStatus the expected status that the transaction should be
+     * @param isTimeout the update txn status operation is it timeout
      * @return a future represents the result of the operation
      */
     CompletableFuture<Void> updateTxnStatus(
-        TxnID txnid, TxnStatus newStatus, TxnStatus expectedStatus);
+        TxnID txnid, TxnStatus newStatus, TxnStatus expectedStatus, boolean isTimeout);
+
+    /**
+     * Get the low water mark of this tc, in order to delete unless transaction in transaction buffer and pending ack.
+     * @return long {@link long} the lowWaterMark
+     */
+    default long getLowWaterMark() {
+        return Long.MIN_VALUE;
+    }
 
     /**
      * Get the transaction coordinator id.
@@ -101,10 +112,30 @@ public interface TransactionMetadataStore {
     TransactionCoordinatorID getTransactionCoordinatorID();
 
     /**
+     * Get the transaction metadata store stats.
+     *
+     * @return TransactionCoordinatorStats {@link TransactionCoordinatorStats}
+     */
+    TransactionCoordinatorStats getCoordinatorStats();
+
+    /**
      * Close the transaction metadata store.
      *
      * @return a future represents the result of this operation
      */
     CompletableFuture<Void> closeAsync();
 
+    /**
+     * Get the transaction metadata store stats.
+     *
+     * @return TransactionMetadataStoreStats {@link TransactionMetadataStoreStats}
+     */
+    TransactionMetadataStoreStats getMetadataStoreStats();
+
+    /**
+     * Get the transactions witch timeout is bigger than given timeout.
+     *
+     * @return {@link TxnMeta} the txnMetas of slow transactions
+     */
+    List<TxnMeta> getSlowTransactions(long timeout);
 }

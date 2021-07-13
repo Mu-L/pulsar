@@ -20,6 +20,7 @@ package org.apache.pulsar.client.impl;
 
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.schema.SchemaDefinition;
+import org.apache.pulsar.client.impl.schema.AutoConsumeSchema;
 import org.apache.pulsar.client.impl.schema.AvroSchema;
 import org.apache.pulsar.client.impl.schema.SchemaTestUtils;
 import org.apache.pulsar.common.schema.KeyValue;
@@ -139,7 +140,7 @@ public class TypedMessageBuilderImplTest {
 
         TypedMessageBuilderImpl typedMessageBuilder = (TypedMessageBuilderImpl)typedMessageBuilderImpl.key("default");
         assertEquals(typedMessageBuilder.getKey(), "default");
-        assertFalse(typedMessageBuilder.getMetadataBuilder().getPartitionKeyB64Encoded());
+        assertFalse(typedMessageBuilder.getMetadataBuilder().isPartitionKeyB64Encoded());
     }
 
     @Test
@@ -154,7 +155,7 @@ public class TypedMessageBuilderImplTest {
 
         TypedMessageBuilderImpl typedMessageBuilder = (TypedMessageBuilderImpl)typedMessageBuilderImpl.key("inline");
         assertEquals(typedMessageBuilder.getKey(), "inline");
-        assertFalse(typedMessageBuilder.getMetadataBuilder().getPartitionKeyB64Encoded());
+        assertFalse(typedMessageBuilder.getMetadataBuilder().isPartitionKeyB64Encoded());
     }
 
     @Test
@@ -188,7 +189,7 @@ public class TypedMessageBuilderImplTest {
 
         TypedMessageBuilderImpl typedMessageBuilder = (TypedMessageBuilderImpl)typedMessageBuilderImpl.keyBytes("default".getBytes());
         assertEquals(typedMessageBuilder.getKey(), Base64.getEncoder().encodeToString("default".getBytes()));
-        assertTrue(typedMessageBuilder.getMetadataBuilder().getPartitionKeyB64Encoded());
+        assertTrue(typedMessageBuilder.getMetadataBuilder().isPartitionKeyB64Encoded());
     }
 
     @Test
@@ -203,7 +204,7 @@ public class TypedMessageBuilderImplTest {
 
         TypedMessageBuilderImpl typedMessageBuilder = (TypedMessageBuilderImpl)typedMessageBuilderImpl.keyBytes("inline".getBytes());
         assertEquals(typedMessageBuilder.getKey(), Base64.getEncoder().encodeToString("inline".getBytes()));
-        assertTrue(typedMessageBuilder.getMetadataBuilder().getPartitionKeyB64Encoded());
+        assertTrue(typedMessageBuilder.getMetadataBuilder().isPartitionKeyB64Encoded());
     }
 
     @Test
@@ -224,6 +225,5 @@ public class TypedMessageBuilderImplTest {
             assertTrue(e.getMessage().contains("This method is not allowed to set keys when in encoding type is SEPARATED"));
         }
     }
-
 
 }

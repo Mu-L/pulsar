@@ -21,6 +21,7 @@ package org.apache.pulsar.io.kafka.sink;
 
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.config.ConfigException;
+import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.KeyValue;
 import org.apache.pulsar.io.core.SinkContext;
@@ -155,6 +156,21 @@ public class KafkaAbstractSinkTest {
 
             @Override
             public CompletableFuture<ByteBuffer> getStateAsync(String key) {
+                return null;
+            }
+            
+            @Override
+            public void deleteState(String key) {
+            	
+            }
+            
+            @Override
+            public CompletableFuture<Void> deleteStateAsync(String key) {
+            	return null;
+            }
+
+            @Override
+            public PulsarClient getPulsarClient() {
                 return null;
             }
         };

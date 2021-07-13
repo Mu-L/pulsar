@@ -33,9 +33,9 @@ import org.apache.pulsar.client.api.RawReader;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.client.impl.conf.ConsumerConfigurationData;
-import org.apache.pulsar.common.api.proto.PulsarApi.CommandAck.AckType;
-import org.apache.pulsar.common.api.proto.PulsarApi.MessageIdData;
-import org.apache.pulsar.common.api.proto.PulsarApi.MessageMetadata;
+import org.apache.pulsar.common.api.proto.CommandAck.AckType;
+import org.apache.pulsar.common.api.proto.MessageIdData;
+import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.util.collections.GrowableArrayBlockingQueue;
@@ -44,7 +44,7 @@ import org.slf4j.LoggerFactory;
 
 public class RawReaderImpl implements RawReader {
 
-    final static int DEFAULT_RECEIVER_QUEUE_SIZE = 1000;
+    static final int DEFAULT_RECEIVER_QUEUE_SIZE = 1000;
     private final ConsumerConfigurationData<byte[]> consumerConfiguration;
     private RawConsumerImpl consumer;
 
@@ -111,7 +111,7 @@ public class RawReaderImpl implements RawReader {
             super(client,
                     conf.getSingleTopic(),
                     conf,
-                    client.externalExecutorProvider().getExecutor(),
+                    client.externalExecutorProvider(),
                     TopicName.getPartitionIndex(conf.getSingleTopic()),
                     false,
                     consumerFuture,
@@ -143,7 +143,6 @@ public class RawReaderImpl implements RawReader {
                     MessageMetadata msgMetadata =
                             Commands.parseMessageMetadata(messageAndCnx.msg.getHeadersAndPayload());
                     numMsg = msgMetadata.getNumMessagesInBatch();
-                    msgMetadata.recycle();
                 } catch (Throwable t) {
                     // TODO message validation
                     numMsg = 1;
